@@ -1,7 +1,10 @@
+import UploadFiles from "../components/UploadFiles"
 
 const AssesmentPage = () => {
   return (
-    <div>AssesmentPage</div>
+    <div className="max-w-7xl m-auto">
+      <UploadFiles />
+    </div>
   )
 }
 
