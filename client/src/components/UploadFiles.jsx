@@ -4,32 +4,36 @@ import ReportDisplay from './ReportDisplay';
 const UploadFiles = () => {
   const [uploadStatus, setUploadStatus] = useState('');
   const [report, setReport] = useState({});
+  const [isUploading, setIsUploading] = useState(false); // Add a loading state
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     const formData = new FormData(event.target);
-    
+    setIsUploading(true); // Set uploading to true
+
     try {
       const response = await fetch('http://127.0.0.1:5000/upload', {
         method: 'POST',
         body: formData
       });
-      
+
       if (!response.ok) {
         throw new Error('Network response was not ok ' + response.statusText);
       }
-      
-      const data = await response.json(); // Call the method to parse the JSON
-      setReport(data); // Set the report state with the parsed data
-      console.log(data); // Handle the data from the response here
-      
+
+      const data = await response.json();
+      setReport(data);
+      console.log(data);
+      setUploadStatus('Upload successful!'); // Set success message
+
     } catch (error) {
       setUploadStatus(`Upload failed: ${error.message}`);
       console.error('There was a problem with the fetch operation:', error);
+    } finally {
+      setIsUploading(false); // Reset uploading state regardless of success or failure
     }
   };
-  
-    
+
   return (
     <div className='flex flex-col gap-16'>
       <div className="my-10 mx-8 md:mx-0 h-screen md:flex md:flex-row flex flex-col items-center text-gray-900 bg-gray-100 bg-opacity-80 rounded-md">
@@ -51,18 +55,24 @@ const UploadFiles = () => {
                 className="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 focus:outline-none"
                 required
               />
-              <button type="submit" className="mt-4 px-4 py-2 bg-purple-600 bg-opacity-50 text-white rounded-lg">
-                Upload
+              <button 
+                type="submit" 
+                className={`mt-4 px-4 py-2 ${isUploading ? 'bg-gray-400' : 'bg-purple-600 bg-opacity-50'} text-white rounded-lg`} 
+                disabled={isUploading} // Disable button when uploading
+              >
+                {isUploading ? 'Uploading...' : 'Upload'} {/* Change button text based on upload status */}
               </button>
             </form>
             {uploadStatus && <p className="mt-4 text-center text-red-600">{uploadStatus}</p>}
           </div>
         </div>
       </div>
-      <div className="text-gray-900 bg-gray-100 bg-opacity-80 px-16 py-8 rounded-md h-auto mx-8 md:mx-0">
-        <p className="font-medium opacity-80 pb-4">Report loaded successfully 📑</p>
-        <ReportDisplay report={report} />
-      </div>
+      {Object.keys(report).length > 0 && ( // Only show report if it exists
+        <div className="text-gray-900 bg-gray-100 bg-opacity-80 px-16 py-8 rounded-md h-auto mx-8 md:mx-0">
+          <p className="font-medium opacity-80 pb-4">Report loaded successfully 📑</p>
+          <ReportDisplay report={report} />
+        </div>
+      )}
     </div>
   );
 };
