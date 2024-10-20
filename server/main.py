@@ -1,29 +1,41 @@
 import os
-import time
 import joblib
 from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
+from flask_cors import CORS
 from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Chroma
 from langchain.embeddings.cohere import CohereEmbeddings
 import cohere
 from tenacity import retry, wait_exponential, stop_after_attempt
+import time
 
-# Initialize Flask app
+# Flask app setup
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
+
+# Configure upload folder and allowed extensions
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'pdf'}
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Ensure the upload folder exists
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Replace with your Cohere API key
+COHERE_API_KEY = "dnTP9WbkjF5EU8QRVYsOdrdbKwjzqAQk0pm4kiay"
 
 # Initialize Cohere Embeddings
-COHERE_API_KEY = "Zd3gb7sVtS9sp6chWG010MQHOiMSUinLW10LHyX1"
 cohere_embeddings = CohereEmbeddings(
     cohere_api_key=COHERE_API_KEY,
     user_agent="gdpr-security-assessment"
 )
 
-# Define paths for persistence
-persist_directory = "./chromadb_store"
-texts_file_path = "./texts.pkl"
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Retry logic for rate limits
 @retry(wait=wait_exponential(multiplier=1, min=1, max=60), stop=stop_after_attempt(6))
 def create_vectorstore_with_retry(texts, embeddings):
     try:
@@ -35,7 +47,6 @@ def create_vectorstore_with_retry(texts, embeddings):
         else:
             raise
 
-# PDF processing
 def process_pdf(file_path):
     loader = PyPDFLoader(file_path)
     data = loader.load()
@@ -45,7 +56,6 @@ def process_pdf(file_path):
 
     return texts
 
-# Process texts in batches
 def process_texts_in_batches(texts, embeddings, batch_size=150, delay=5):
     vectorstore = None
     for i in range(0, len(texts), batch_size):
@@ -56,9 +66,8 @@ def process_texts_in_batches(texts, embeddings, batch_size=150, delay=5):
         time.sleep(delay)
     return vectorstore
 
-# Generate response from Cohere API
-def generate_response(query, docs, cohere_api_key):
-    co = cohere.Client(cohere_api_key)
+def generate_response(query, docs):
+    co = cohere.Client(COHERE_API_KEY)
     context = "\n".join([doc.page_content for doc in docs])
     prompt = f"Based on the following information:\n{context}\n\nAnswer the question: {query}"
     response = co.generate(
@@ -69,37 +78,41 @@ def generate_response(query, docs, cohere_api_key):
     )
     return response.generations[0].text.strip()
 
-# Security assessment
 def assess_security_architecture(pdf_path):
     texts = process_pdf(pdf_path)
     vectorstore = process_texts_in_batches(texts, cohere_embeddings)
 
     security_aspects = [
-        "Data encryption", "Access control", "Data minimization", "Regular security audits",
-        "Incident response plan", "Employee training", "Third-party risk management",
-        "Data retention policies", "Privacy by design", "Consent management"
+        "Data encryption",
+        "Access control",
+        "Data minimization",
+        "Regular security audits",
+        "Incident response plan",
+        "Employee training",
+        "Third-party risk management",
+        "Data retention policies",
+        "Privacy by design",
+        "Consent management"
     ]
 
     missing_aspects = []
     for aspect in security_aspects:
         query = f"Does the document mention or describe {aspect}?"
         docs = vectorstore.similarity_search(query)
-        response = generate_response(query, docs, COHERE_API_KEY)
+        response = generate_response(query, docs)
         if "no" in response.lower() or "not mentioned" in response.lower():
             missing_aspects.append(aspect)
 
     return missing_aspects
 
-# Calculate risk score
 def calculate_risk_score(missing_aspects):
     total_aspects = 10
     missing_count = len(missing_aspects)
     risk_score = (missing_count / total_aspects) * 100
     return risk_score
 
-# Aspect details
 def get_aspect_details(aspect):
-    details ={
+    details = {
         "Data minimization": {
             "description": "The practice of limiting the collection and retention of personal data to what is directly relevant and necessary for a specified purpose.",
             "threats": [
@@ -155,38 +168,42 @@ def get_aspect_details(aspect):
     }
     return details.get(aspect, {})
 
-# Main route for PDF processing
-@app.route('/assess', methods=['POST'])
-def assess_pdf():
-    if 'pdf' not in request.files:
-        return jsonify({"error": "No PDF file provided."}), 400
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
 
-    pdf_file = request.files['pdf']
-    pdf_path = os.path.join("uploads", pdf_file.filename)
-    pdf_file.save(pdf_path)
+        # Process the uploaded PDF file
+        missing_aspects = assess_security_architecture(file_path)
+        risk_score = calculate_risk_score(missing_aspects)
 
-    # Assess security architecture
-    missing_aspects = assess_security_architecture(pdf_path)
-    risk_score = calculate_risk_score(missing_aspects)
+        response = {
+            "missing_aspects": missing_aspects,
+            "risk_score": risk_score,
+            "message": "Analysis complete",
+            "details": {}
+        }
 
-    # Prepare response
-    response = {
-        "missing_aspects": missing_aspects,
-        "risk_score": risk_score,
-        "recommendations": []
-    }
+        if risk_score < 20:
+            response["risk_level"] = "Low risk: Your security architecture is robust."
+        elif risk_score < 50:
+            response["risk_level"] = "Medium risk: There are some gaps in your security architecture that should be addressed."
+        else:
+            response["risk_level"] = "High risk: Significant improvements are needed in your security architecture."
 
-    for aspect in missing_aspects:
-        details = get_aspect_details(aspect)
-        response['recommendations'].append({
-            "aspect": aspect,
-            "description": details.get('description', 'N/A'),
-            "threats": details.get('threats', ['N/A']),
-            "recommendations": details.get('recommendations', ['N/A'])
-        })
+        for aspect in missing_aspects:
+            response["details"][aspect] = get_aspect_details(aspect)
 
-    return jsonify(response)
+        return jsonify(response)
+    else:
+        return jsonify({"error": "File type not allowed"}), 400
 
-# Run Flask app
 if __name__ == '__main__':
     app.run(debug=True)
